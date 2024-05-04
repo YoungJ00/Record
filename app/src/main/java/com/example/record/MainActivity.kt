@@ -6,8 +6,10 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.provider.MediaStore
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -15,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.example.record.R
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -83,16 +86,32 @@ class MainActivity : AppCompatActivity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_FILE_SELECTION && resultCode == RESULT_OK) {
             data?.data?.let { uri ->
-                val path = FileUtils.getPath(this, uri)
+                val path = getPath(uri)
                 nameTextView.text = path
                 outputFile = File(path)
             }
         }
     }
 
+    private fun getPath(uri: Uri): String? {
+        val cursor = contentResolver.query(uri, null, null, null, null)
+        val path = if (cursor != null) {
+            cursor.moveToFirst()
+            val index = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.DATA)
+            val filePath = cursor.getString(index)
+            cursor.close()
+            filePath
+        } else {
+            uri.path
+        }
+        return path
+    }
+
     private fun startRecording() {
-        setupAudioRecording()
-        isRecording = true
+        if (!isRecording) {
+            isRecording = true
+            setupAudioRecording()
+        }
     }
 
     private fun stopRecording() {
@@ -132,7 +151,7 @@ class MainActivity : AppCompatActivity() {
                 val numBytesRead = audioRecorder.read(data, 0, bufferSize)
                 if (numBytesRead != AudioRecord.ERROR_INVALID_OPERATION) {
                     try {
-                        fileOutputStream.write(data)
+                        fileOutputStream.write(data, 0, numBytesRead)
                     } catch (e: IOException) {
                         e.printStackTrace()
                     }
@@ -159,7 +178,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestPermission() {
-        recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(
+                Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ),
+            REQUEST_PERMISSION_CODE
+        )
     }
 
     companion object {
