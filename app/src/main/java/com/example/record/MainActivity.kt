@@ -1,195 +1,169 @@
 package com.example.record
-
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.AudioFormat
-import android.media.AudioRecord
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.media.MediaRecorder
-import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
-import android.provider.MediaStore
+import android.text.InputType
 import android.widget.Button
-import android.widget.TextView
+import android.widget.EditText
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.example.record.R
+import androidx.documentfile.provider.DocumentFile
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
 
 class MainActivity : AppCompatActivity() {
-
-    private val REQUEST_PERMISSION_CODE = 100
+    private var audioPlayer: MediaPlayer? = null
+    private var audioRecorder: MediaRecorder? = null
     private var isRecording = false
-    private lateinit var selectButton: Button
-    private lateinit var playRecordButton: Button
-    private lateinit var stopSaveButton: Button
-    private lateinit var nameTextView: TextView
-    private var outputFile: File? = null
+    private var audioFilename: String? = null // Declare audioFilename as a member variable
 
-    private val recordAudioPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-            if (isGranted) {
-                setupAudioRecording()
-            } else {
-                Toast.makeText(this, "Permission denied", Toast.LENGTH_SHORT).show()
-            }
-        }
+    private val REQUEST_CODE_PICK_AUDIO = 101
+    private val REQUEST_CODE_PERMISSIONS = 102
+    private val REQUIRED_PERMISSIONS = arrayOf(
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.WRITE_EXTERNAL_STORAGE
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        selectButton = findViewById(R.id.select_button)
-        playRecordButton = findViewById(R.id.play_record_button)
-        stopSaveButton = findViewById(R.id.stop_save_button)
-        nameTextView = findViewById(R.id.name)
+        setupPermissions()
 
-        selectButton.setOnClickListener {
-            openFileSelection()
+        findViewById<Button>(R.id.select_button).setOnClickListener {
+            pickAudioFile()
         }
 
-        playRecordButton.setOnClickListener {
-            if (!isRecording) {
-                startRecording()
-            } else {
-                stopRecording()
-            }
+        findViewById<Button>(R.id.play_record_button).setOnClickListener {
+            playAndRecord()
         }
 
-        stopSaveButton.setOnClickListener {
-            stopRecording()
-            outputFile?.let { saveRecording(it) }
+        findViewById<Button>(R.id.stop_save_button).setOnClickListener {
+            stopAndSave()
         }
-
-        // Permission check and request
-        if (!checkPermissionFromDevice())
-            requestPermission()
-        else
-            setupAudioRecording()
     }
 
-    private fun openFileSelection() {
+    private fun setupPermissions() {
+        val permissionsToRequest = mutableListOf<String>()
+        for (permission in REQUIRED_PERMISSIONS) {
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+                permissionsToRequest.add(permission)
+            }
+        }
+        if (permissionsToRequest.isNotEmpty()) {
+            ActivityCompat.requestPermissions(this, permissionsToRequest.toTypedArray(), REQUEST_CODE_PERMISSIONS)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+            if (grantResults.isNotEmpty()) {
+                for (result in grantResults) {
+                    if (result != PackageManager.PERMISSION_GRANTED) {
+                        Toast.makeText(this, "Permission required for app functionality", Toast.LENGTH_SHORT).show()
+                        finish()
+                        return
+                    }
+                }
+            }
+        }
+    }
+
+    private fun pickAudioFile() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
-            type = "audio/*"
+            type = "audio/wav" // .wav 파일만 선택 가능하도록 타입 변경
         }
-        startActivityForResult(intent, REQUEST_FILE_SELECTION)
+        startActivityForResult(intent, REQUEST_CODE_PICK_AUDIO)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_FILE_SELECTION && resultCode == RESULT_OK) {
+        if (requestCode == REQUEST_CODE_PICK_AUDIO && resultCode == Activity.RESULT_OK) {
             data?.data?.let { uri ->
-                val path = getPath(uri)
-                nameTextView.text = path
-                outputFile = File(path)
-            }
-        }
-    }
-
-    private fun getPath(uri: Uri): String? {
-        val cursor = contentResolver.query(uri, null, null, null, null)
-        val path = if (cursor != null) {
-            cursor.moveToFirst()
-            val index = cursor.getColumnIndex(MediaStore.Audio.AudioColumns.DATA)
-            val filePath = cursor.getString(index)
-            cursor.close()
-            filePath
-        } else {
-            uri.path
-        }
-        return path
-    }
-
-    private fun startRecording() {
-        if (!isRecording) {
-            isRecording = true
-            setupAudioRecording()
-        }
-    }
-
-    private fun stopRecording() {
-        isRecording = false
-    }
-
-    private fun saveRecording(file: File) {
-        // You can implement your saving logic here
-        Toast.makeText(this, "Recording saved: ${file.absolutePath}", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun setupAudioRecording() {
-        val bufferSize = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT
-        )
-
-        val audioRecorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
-        )
-
-        val data = ByteArray(bufferSize)
-
-        Thread {
-            val wavFile = File(Environment.getExternalStorageDirectory().absolutePath, "recorded_audio.wav")
-
-            val fileOutputStream = FileOutputStream(wavFile)
-
-            audioRecorder.startRecording()
-
-            while (isRecording) {
-                val numBytesRead = audioRecorder.read(data, 0, bufferSize)
-                if (numBytesRead != AudioRecord.ERROR_INVALID_OPERATION) {
+                val documentFile = DocumentFile.fromSingleUri(this, uri)
+                if (documentFile != null && documentFile.exists() && documentFile.isFile) {
                     try {
-                        fileOutputStream.write(data, 0, numBytesRead)
-                    } catch (e: IOException) {
-                        e.printStackTrace()
+                        audioPlayer = MediaPlayer().apply {
+                            setDataSource(this@MainActivity, uri)
+                            setAudioAttributes(AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                            prepare()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(this, "Failed to load selected song: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
-
-            audioRecorder.stop()
-            audioRecorder.release()
-            fileOutputStream.close()
-        }.start()
+        }
     }
 
-    private fun checkPermissionFromDevice(): Boolean {
-        val writeExternalStorage = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-        )
-        val recordAudio = ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        )
-        return writeExternalStorage == PackageManager.PERMISSION_GRANTED &&
-                recordAudio == PackageManager.PERMISSION_GRANTED
+
+    private fun playAndRecord() {
+        audioFilename = "${externalCacheDir?.absolutePath}/temporaryRecording.m4a"
+        audioPlayer?.let { player ->
+            audioRecorder = MediaRecorder().apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                audioFilename?.let { setOutputFile(it) } // Use audioFilename here
+                try {
+                    prepare()
+                    start()
+                    player.start()
+                    isRecording = true
+                } catch (e: Exception) {
+                    Toast.makeText(this@MainActivity, "Failed to start recording: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
-    private fun requestPermission() {
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(
-                Manifest.permission.RECORD_AUDIO,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            ),
-            REQUEST_PERMISSION_CODE
-        )
+    private fun stopAndSave() {
+        audioPlayer?.stop()
+        if (isRecording) {
+            audioRecorder?.apply {
+                stop()
+                release()
+                isRecording = false
+                audioFilename?.let { promptForFileName(File(it)) } // Use audioFilename here
+            }
+        }
     }
 
-    companion object {
-        private const val SAMPLE_RATE = 44100
-        private const val REQUEST_FILE_SELECTION = 101
+    private fun promptForFileName(recordedFile: File) {
+        val builder = AlertDialog.Builder(this)
+        builder.setTitle("Save Recording")
+        val input = EditText(this)
+        input.inputType = InputType.TYPE_CLASS_TEXT
+        builder.setView(input)
+        builder.setPositiveButton("Save") { dialog, _ ->
+            val newName = input.text.toString().trim()
+            if (newName.isNotEmpty()) {
+                val parentDirectory = recordedFile.parentFile
+                val newPath = File(parentDirectory, "$newName.m4a")
+                try {
+                    recordedFile.renameTo(newPath)
+                } catch (e: Exception) {
+                    Toast.makeText(this, "Failed to save recording: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            } else {
+                Toast.makeText(this, "Please enter a valid filename", Toast.LENGTH_SHORT).show()
+            }
+            dialog.dismiss()
+        }
+        builder.setNegativeButton("Cancel") { dialog, _ ->
+            dialog.cancel()
+        }
+        builder.show()
     }
 }
+
+
