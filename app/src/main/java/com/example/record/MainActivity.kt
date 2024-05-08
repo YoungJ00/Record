@@ -1,4 +1,5 @@
 package com.example.record
+
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
@@ -165,5 +166,3 @@ class MainActivity : AppCompatActivity() {
         builder.show()
     }
 }
-
-
